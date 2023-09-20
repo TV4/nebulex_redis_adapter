@@ -7,6 +7,7 @@ defmodule NebulexRedisAdapter.Command do
   alias NebulexRedisAdapter.{
     ClientCluster,
     Pool,
+    PrimaryReplica,
     RedisCluster,
     RedisCluster.ConfigManager
   }
@@ -23,6 +24,8 @@ defmodule NebulexRedisAdapter.Command do
           Keyword.t()
         ) :: {:ok, term} | {:error, term}
   def exec(adapter_meta, command, key \\ nil, opts \\ []) do
+    opts = Keyword.put_new(opts, :"$operation", :write)
+
     adapter_meta
     |> conn(key, opts)
     |> Redix.command(command, redis_command_opts(opts))
@@ -51,6 +54,11 @@ defmodule NebulexRedisAdapter.Command do
     do_exec!(adapter_meta, command, key, opts, on_moved)
   end
 
+  def exec!(%{mode: :primary_replica} = adapter_meta, command, key, opts) do
+    opts = Keyword.put_new(opts, :"$operation", :write)
+    do_exec!(adapter_meta, command, key, opts, nil)
+  end
+
   def exec!(adapter_meta, command, key, opts) do
     do_exec!(adapter_meta, command, key, opts, nil)
   end
@@ -72,6 +80,8 @@ defmodule NebulexRedisAdapter.Command do
           Keyword.t()
         ) :: {:ok, [term]} | {:error, term}
   def pipeline(adapter_meta, commands, key \\ nil, opts \\ []) do
+    opts = Keyword.put_new(opts, :"$operation", :write)
+
     adapter_meta
     |> conn(key, opts)
     |> Redix.pipeline(commands, redis_command_opts(opts))
@@ -98,6 +108,12 @@ defmodule NebulexRedisAdapter.Command do
     end
 
     do_pipeline!(adapter_meta, commands, key, opts, on_moved)
+  end
+
+  def pipeline!(%{mode: :primary_replica} = adapter_meta, commands, key, opts) do
+    opts = Keyword.put_new(opts, :"$operation", :write)
+
+    do_pipeline!(adapter_meta, commands, key, opts, nil)
   end
 
   def pipeline!(adapter_meta, commands, key, opts) do
@@ -152,6 +168,21 @@ defmodule NebulexRedisAdapter.Command do
          _opts
        ) do
     ClientCluster.get_conn(registry, name, nodes, key, keyslot)
+  end
+
+  defp conn(
+         %{
+           mode: :primary_replica,
+           name: name,
+           registry: registry,
+           nodes: nodes
+         },
+         _key,
+         opts
+       ) do
+    op = Keyword.fetch!(opts, :"$operation")
+
+    PrimaryReplica.get_conn(registry, name, nodes, op)
   end
 
   defp handle_command_response({:ok, response}, _on_moved) do

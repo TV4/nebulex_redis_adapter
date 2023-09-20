@@ -6,7 +6,7 @@ defmodule NebulexRedisAdapter.Options do
   # Start option definitions (runtime)
   start_opts_defs = [
     mode: [
-      type: {:in, [:standalone, :redis_cluster, :client_side_cluster]},
+      type: {:in, [:standalone, :redis_cluster, :client_side_cluster, :primary_replica]},
       required: false,
       default: :standalone,
       doc: """
@@ -200,6 +200,44 @@ defmodule NebulexRedisAdapter.Options do
           """
         ]
       ]
+    ],
+    primary_replica: [
+      type: {:custom, __MODULE__, :validate_non_empty_cluster_opts, [:primary_replica]},
+      required: false,
+      doc: """
+      Required only when `:mode` is set to `:primary_replica`. A keyword
+      list of options.
+
+      See ["Primary-replica Cluster options"](#module-client-side-cluster-options)
+      section below.
+      """,
+      subsection: """
+      ### Client-side Cluster options
+
+      The available options are:
+      """,
+      keys: [
+        nodes: [
+          type: {:custom, __MODULE__, :validate_non_empty_cluster_opts, [:primary_replica]},
+          required: true,
+          doc: """
+          A keyword list of named nodes where the key is an atom as
+          an identifier and the value is another keyword list of options
+          (same as `:conn_opts`).
+
+          See ["Rrimary-replica Cluster"](#module-client-side-cluster)
+          for more information.
+          """,
+          keys: [
+            *: [
+              type: :keyword_list,
+              doc: """
+              Same as `:conn_opts`.
+              """
+            ]
+          ]
+        ]
+      ]
     ]
   ]
 
@@ -306,6 +344,31 @@ defmodule NebulexRedisAdapter.Options do
                   client_side_cluster: [
                     nodes: [
                       node1: [
+                        conn_opts: [
+                          host: "127.0.0.1",
+                          port: 9001
+                        ]
+                      ],
+                      ...
+                    ]
+                  ]
+
+            See the documentation for more information.
+    """
+  end
+
+  def invalid_cluster_config_error(prelude, value, :primary_replica_cluster) do
+    """
+    #{prelude}expected non-empty keyword list, got: #{inspect(value)}
+
+            Client-side Cluster configuration example:
+
+                config :my_app, MyApp.ClientSideClusterCache,
+                  mode: :primary_replica,
+                  primary_replica: [
+                    nodes: [
+                      node1: [
+                        type: :write,
                         conn_opts: [
                           host: "127.0.0.1",
                           port: 9001

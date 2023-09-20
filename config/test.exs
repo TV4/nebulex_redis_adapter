@@ -33,6 +33,27 @@ config :nebulex_redis_adapter, NebulexRedisAdapter.TestCache.ClientCluster,
     ]
   ]
 
+config :nebulex_redis_adapter, NebulexRedisAdapter.TestCache.PrimaryReplica,
+  mode: :primary_replica,
+  primary_replica: [
+    nodes: [
+      primary: [
+        type: :write,
+        conn_opts: [
+          host: "127.0.0.1",
+          port: 9004
+        ]
+      ],
+      node2: [
+        type: :read,
+        pool_size: 2,
+        conn_opts: [
+          url: "redis://127.0.0.1:9004"
+        ]
+      ]
+    ]
+  ]
+
 # Redis Cluster mode (with Redis >= 7)
 config :nebulex_redis_adapter, NebulexRedisAdapter.TestCache.RedisCluster,
   mode: :redis_cluster,

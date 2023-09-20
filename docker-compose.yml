@@ -29,6 +29,13 @@ services:
     networks:
       - redis_net
 
+  redis-standalone4:
+    image: "redis:alpine"
+    ports:
+      - "9004:6379"
+    networks:
+      - redis_net
+
   redis-cluster:
     image: grokzen/redis-cluster:6.2.10
     ports:

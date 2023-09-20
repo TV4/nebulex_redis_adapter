@@ -366,6 +366,7 @@ defmodule NebulexRedisAdapter do
     Command,
     Connection,
     Options,
+    PrimaryReplica,
     RedisCluster
   }
 
@@ -511,6 +512,10 @@ defmodule NebulexRedisAdapter do
     ClientCluster.init(adapter_meta, opts)
   end
 
+  defp do_init(%{mode: :primary_replica} = adapter_meta, opts) do
+    PrimaryReplica.init(adapter_meta, opts)
+  end
+
   ## Nebulex.Adapter.Entry
 
   @impl true
@@ -520,6 +525,8 @@ defmodule NebulexRedisAdapter do
       encode_key_opts: enc_key_opts,
       decode_value_opts: dec_value_opts
     } = adapter_meta
+
+    opts = Keyword.put(opts, :"$operation", :read)
 
     adapter_meta
     |> Command.exec!(["GET", serializer.encode_key(key, enc_key_opts)], key, opts)
@@ -532,6 +539,12 @@ defmodule NebulexRedisAdapter do
   end
 
   defp do_get_all(%{mode: :standalone} = adapter_meta, keys, opts) do
+    mget(nil, adapter_meta, keys, opts)
+  end
+
+  defp do_get_all(%{mode: :primary_replica} = adapter_meta, keys, opts) do
+    opts = Keyword.put(opts, :"$operation", :read)
+
     mget(nil, adapter_meta, keys, opts)
   end
 
@@ -583,6 +596,8 @@ defmodule NebulexRedisAdapter do
     redis_v = serializer.encode_value(value, enc_value_opts)
     cmd_opts = cmd_opts(action: on_write, ttl: fix_ttl(ttl))
 
+    opts = Keyword.put(opts, :"$operation", :write)
+
     case Command.exec!(adapter_meta, ["SET", redis_k, redis_v | cmd_opts], key, opts) do
       "OK" -> true
       nil -> false
@@ -595,6 +610,10 @@ defmodule NebulexRedisAdapter do
 
     case adapter_meta.mode do
       :standalone ->
+        do_put_all(adapter_meta, nil, entries, ttl, on_write, opts)
+
+      :primary_replica ->
+        opts = Keyword.put(opts, :"$operation", :write)
         do_put_all(adapter_meta, nil, entries, ttl, on_write, opts)
 
       _ ->
@@ -648,6 +667,7 @@ defmodule NebulexRedisAdapter do
 
   @impl true
   defspan delete(adapter_meta, key, opts) do
+    opts = Keyword.put(opts, :"$operation", :write)
     _ = Command.exec!(adapter_meta, ["DEL", enc_key(adapter_meta, key)], key, opts)
 
     :ok
@@ -656,13 +676,14 @@ defmodule NebulexRedisAdapter do
   @impl true
   defspan take(adapter_meta, key, opts) do
     redis_k = enc_key(adapter_meta, key)
+    opts = Keyword.put(opts, :"$operation", :write)
 
     with_pipeline(adapter_meta, key, [["GET", redis_k], ["DEL", redis_k]], opts)
   end
 
   @impl true
   defspan has_key?(adapter_meta, key) do
-    case Command.exec!(adapter_meta, ["EXISTS", enc_key(adapter_meta, key)], key) do
+    case Command.exec!(adapter_meta, ["EXISTS", enc_key(adapter_meta, key)], key, ["$operation": :read]) do
       1 -> true
       0 -> false
     end
@@ -670,7 +691,7 @@ defmodule NebulexRedisAdapter do
 
   @impl true
   defspan ttl(adapter_meta, key) do
-    case Command.exec!(adapter_meta, ["TTL", enc_key(adapter_meta, key)], key) do
+    case Command.exec!(adapter_meta, ["TTL", enc_key(adapter_meta, key)], key, ["$operation": :read]) do
       -1 -> :infinity
       -2 -> nil
       ttl -> ttl * 1000
@@ -679,22 +700,22 @@ defmodule NebulexRedisAdapter do
 
   @impl true
   defspan expire(adapter_meta, key, ttl) do
-    do_expire(adapter_meta, key, ttl)
+    do_expire(adapter_meta, key, ttl, ["$operation": :write])
   end
 
-  defp do_expire(adapter_meta, key, :infinity) do
+  defp do_expire(adapter_meta, key, :infinity, opts) do
     redis_k = enc_key(adapter_meta, key)
 
-    case Command.pipeline!(adapter_meta, [["TTL", redis_k], ["PERSIST", redis_k]], key) do
+    case Command.pipeline!(adapter_meta, [["TTL", redis_k], ["PERSIST", redis_k]], key, opts) do
       [-2, 0] -> false
       [_, _] -> true
     end
   end
 
-  defp do_expire(adapter_meta, key, ttl) do
+  defp do_expire(adapter_meta, key, ttl, opts) do
     redis_k = enc_key(adapter_meta, key)
 
-    case Command.exec!(adapter_meta, ["EXPIRE", redis_k, fix_ttl(ttl)], key) do
+    case Command.exec!(adapter_meta, ["EXPIRE", redis_k, fix_ttl(ttl)], key, opts) do
       1 -> true
       0 -> false
     end
@@ -704,7 +725,7 @@ defmodule NebulexRedisAdapter do
   defspan touch(adapter_meta, key) do
     redis_k = enc_key(adapter_meta, key)
 
-    case Command.exec!(adapter_meta, ["TOUCH", redis_k], key) do
+    case Command.exec!(adapter_meta, ["TOUCH", redis_k], key, ["$operation": :write]) do
       1 -> true
       0 -> false
     end
@@ -712,6 +733,7 @@ defmodule NebulexRedisAdapter do
 
   @impl true
   defspan update_counter(adapter_meta, key, incr, ttl, default, opts) do
+    opts = Keyword.put(opts, :"$operation", :write)
     do_update_counter(adapter_meta, key, incr, ttl, default, opts)
   end
 
@@ -761,10 +783,12 @@ defmodule NebulexRedisAdapter do
   end
 
   defp do_execute(%{mode: mode} = adapter_meta, :count_all, nil, opts) do
+    opts = Keyword.put(opts, :"$operation", :read)
     exec!(mode, [adapter_meta, ["DBSIZE"], opts], [0, &Kernel.+(&2, &1)])
   end
 
   defp do_execute(%{mode: mode} = adapter_meta, :delete_all, nil, opts) do
+    opts = Keyword.put(opts, :"$operation", :write)
     size = exec!(mode, [adapter_meta, ["DBSIZE"], opts], [0, &Kernel.+(&2, &1)])
     _ = exec!(mode, [adapter_meta, ["FLUSHDB"], opts], [])
 
@@ -773,6 +797,14 @@ defmodule NebulexRedisAdapter do
 
   defp do_execute(%{mode: :standalone} = adapter_meta, :delete_all, {:in, keys}, opts)
        when is_list(keys) do
+    _ = Command.exec!(adapter_meta, ["DEL" | Enum.map(keys, &enc_key(adapter_meta, &1))], opts)
+
+    length(keys)
+  end
+
+  defp do_execute(%{mode: :primary_replica} = adapter_meta, :delete_all, {:in, keys}, opts)
+       when is_list(keys) do
+    opts = Keyword.put(opts, :"$operation", :write)
     _ = Command.exec!(adapter_meta, ["DEL" | Enum.map(keys, &enc_key(adapter_meta, &1))], opts)
 
     length(keys)
@@ -857,6 +889,8 @@ defmodule NebulexRedisAdapter do
   end
 
   defp execute_query(pattern, %{mode: mode} = adapter_meta, opts) when is_binary(pattern) do
+    opts = Keyword.put(opts, :"$operation", :read)
+
     exec!(mode, [adapter_meta, ["KEYS", pattern], opts], [[], &Kernel.++(&1, &2)])
   end
 
@@ -874,6 +908,10 @@ defmodule NebulexRedisAdapter do
 
   defp exec!(:redis_cluster, args, extra_args) do
     apply(RedisCluster, :exec!, args ++ extra_args)
+  end
+
+  defp exec!(:primary_replica, args, extra_args) do
+    apply(PrimaryReplica, :exec!, args ++ extra_args)
   end
 
   defp group_keys_by_hash_slot(enum, %{

@@ -15,6 +15,13 @@ defmodule NebulexRedisAdapter.TestCache do
       adapter: NebulexRedisAdapter
   end
 
+  defmodule PrimaryReplica do
+    @moduledoc false
+    use Nebulex.Cache,
+      otp_app: :nebulex_redis_adapter,
+      adapter: NebulexRedisAdapter
+  end
+
   defmodule RedisCluster do
     @moduledoc false
     use Nebulex.Cache,
